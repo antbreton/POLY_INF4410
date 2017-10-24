@@ -6,7 +6,7 @@ import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 
-import tp2.ServerInterface;
+import tp2.shared.ServerInterface;
 
 public class Repartiteur {
 	public static void main(String[] args) {
