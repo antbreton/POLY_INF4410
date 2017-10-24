@@ -5,4 +5,5 @@ import java.rmi.RemoteException;
 
 public interface ServerInterface extends Remote {
 	int execute(String[] tache) throws RemoteException;
+	int getSeuil() throws RemoteException;
 }
