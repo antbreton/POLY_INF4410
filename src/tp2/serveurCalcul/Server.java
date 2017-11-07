@@ -14,11 +14,13 @@ public class Server implements ServerInterface {
 	
 	private Integer seuilDeSurcharge;
 	private Integer tauxDeMalice;
+	private Integer tauxDePanne;
 	private Random randomGen;
 
 	public static void main(String[] args) {
 		Integer surcharge = 1;
 		Integer malice = 0;
+		Integer panne = 0;
 		if (args.length > 0) {
 			surcharge = new Integer(args[0]);
 		}
@@ -27,14 +29,21 @@ public class Server implements ServerInterface {
 			malice = new Integer(args[1]);
 		}
 		
-		Server server = new Server(surcharge, malice);
+		if (args.length > 2) {
+			panne = new Integer(args[2]);
+		}
+		
+		
+		Server server = new Server(surcharge, malice, panne);
 		server.run();
 	}
 
-	public Server(Integer surcharge, Integer malice) {
+	public Server(Integer surcharge, Integer malice, Integer panne) {
 		super();
 		this.seuilDeSurcharge = surcharge;
 		this.tauxDeMalice = malice;
+		this.tauxDePanne = panne;
+		System.out.println("Initialisation avec surcharge=" + this.seuilDeSurcharge + " et malice=" + this.tauxDeMalice + "\"");
 		this.randomGen = new Random();
 	}
 
@@ -59,18 +68,24 @@ public class Server implements ServerInterface {
 		}
 	}
 	
-	private Boolean refus(Integer length){
-		if (randomGen.nextFloat() < (length - seuilDeSurcharge) / (5 * seuilDeSurcharge) ){
+	private Boolean refus(Integer length){		
+		if (randomGen.nextFloat() < (new Float(length - seuilDeSurcharge)) / (5.0f * seuilDeSurcharge) ){
 			return true;
 		}
 		return false;
 	}
 	
 	private Boolean malicieux(){
-		if (randomGen.nextInt() < tauxDeMalice ){
+		if (randomGen.nextInt(100) < tauxDeMalice ){
 			return true;
 		}
 		return false;
+	}
+	
+	private void panne(){
+		if (randomGen.nextInt(100) < tauxDePanne ){
+			System.exit(0);
+		}
 	}
 	
 	/*
@@ -79,17 +94,21 @@ public class Server implements ServerInterface {
 	 */
 	@Override
 	public int execute(String[] tache) throws RemoteException {
+		
 		Integer lengthOfTache = tache.length;
 		if (refus(lengthOfTache)){
+			System.out.println("Refus pour longueur de tache: " + lengthOfTache);
 			return -1;
 		}
 		
+		
 		int resultat = 0;
 		for (String operation: tache){
+			System.out.println("Début de l'opération: " + operation);
 			String[] parsedOperation = operation.split(" ");
-			if (parsedOperation[0] == "prime"){
+			if (parsedOperation[0].equals("prime")){
 				resultat = ( resultat + Operations.prime( Integer.parseInt(parsedOperation[1]) ) ) % 4000;
-			} else if (parsedOperation[0] == "pell") {
+			} else if (parsedOperation[0].equals("pell")) {
 				resultat = ( resultat + Operations.pell( Integer.parseInt(parsedOperation[1]) ) ) % 4000;
 			} else {
 				return -1;
@@ -99,6 +118,9 @@ public class Server implements ServerInterface {
 		if (malicieux()){
 			return randomGen.nextInt(4000);
 		}
+
+		panne();
+		System.out.println("Retour du résultat: " + resultat);
 		return resultat;
 	}
 	

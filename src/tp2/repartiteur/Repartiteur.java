@@ -18,8 +18,9 @@ public class Repartiteur {
 	
 	private ArrayList<ServerInterface> serveurs = new ArrayList<>();
 	private int currServ = 0;
-	public static int taskSize = 10;
+	public int taskSize = 10;
 	private Integer res = 0;
+	private Boolean secured = true;
 	
 	public static void main(String[] args) {
 		String opFilename = null;
@@ -34,20 +35,52 @@ public class Repartiteur {
 		} else {
 			confFilename = "ips.txt";
 		}
+		
+		//If Repartiteur is running in insecured mode, it will create tasks
+		// with 2 required servers to accept response.
+		Boolean secured = true;
+		if (args.length > 2) {
+			if (args[2].equals("insecured")){
+				secured = false;
+			} else {
+				System.out.println("Erreur: Mode de sécurité invalide");
+			}
+		}
 
-		Repartiteur repartiteur = new Repartiteur(confFilename);
+		Repartiteur repartiteur = new Repartiteur(confFilename, secured);
 		repartiteur.run(opFilename);
 	}
 
-	public Repartiteur(String confFilename) {
+	public Repartiteur(String confFilename, Boolean secured) {
+		
+		this.secured = secured;
 		
 		// Get Server IPs from given configuration file
 		String[] serverIPs = parseInputFile(confFilename);
 		
+		//Task have a maximum of 100 operations.
+		int minSeuil = 100;
 		// For each IP get the associated ServerIterface
 		for (String ip : serverIPs) {
-			serveurs.add(loadServerStub(ip));
+			ServerInterface curr = loadServerStub(ip);
+			try{
+			int currSeuil = curr.getSeuil();
+			
+			// get the minimum threshold of servers
+			if(currSeuil < minSeuil)
+				minSeuil = currSeuil;
+			} catch(Exception e)
+			{
+				System.out.println("RMI getSeuil error");
+			}
+			
+			// Add server in the list
+			serveurs.add(curr);
 		}
+		
+		// TaskSize computing
+		System.out.println(minSeuil);
+		taskSize = 3*minSeuil;
 	}
 
 	private void run(String filename) {
@@ -58,6 +91,8 @@ public class Repartiteur {
 		// Get task Arrays 
 		ArrayList <Task> tasks = getTaskArray(operations);
 		ArrayList <Thread> threads = new ArrayList<>();
+		
+		checkIfNbServerIsEnough();
 		
 		// send tasks 
 		for(Task t : tasks)
@@ -87,7 +122,13 @@ public class Repartiteur {
 		{
 			if(i%taskSize == 0)
 			{
-				curr = new Task();
+				if (secured){
+					curr = new Task(1);
+				}
+				else {
+					curr = new Task(2);
+				}
+				
 				tasks.add(curr);
 			}
 			curr.addOperation(operations[i]);
@@ -99,7 +140,8 @@ public class Repartiteur {
 	private synchronized ServerInterface getNextServer()
 	{
 		// Acces concurrent qui doit être protégé par un sem
-		ServerInterface next = serveurs.get(currServ%serveurs.size()-1);
+		checkIfNbServerIsEnough();
+		ServerInterface next = serveurs.get(currServ%serveurs.size());
 		currServ++;
 		return next;
 	}
@@ -122,7 +164,7 @@ public class Repartiteur {
 					t1.join();
 					t2.join();
 				} catch (Exception e){
-					e.printStackTrace();
+					//e.printStackTrace();
 				}
 				
 				// while the task response is not acceptable
@@ -134,7 +176,7 @@ public class Repartiteur {
 					try{
 						t1.join();
 					} catch (Exception e){
-						e.printStackTrace();
+						//e.printStackTrace();
 					}
 				}
 				
@@ -159,17 +201,39 @@ public class Repartiteur {
 						
 						// Semaphore pour ajouter la reponse
 						synchronized (tache){
+							System.out.println("Retour du serveur: " + result);
 							tache.addResponse(s, result);
 						}
 						
 					} catch (RemoteException e) {
-						System.out.println("Erreur: " + e.getMessage());
+						//System.out.println("Erreur: " + e.getMessage());
+						synchronized (serveurs){
+							if(serveurs.contains(s)){
+								System.out.println("Panne intempestive");
+								managePanne(s);
+							}
+						}
 					}	
 				}
 			});
 			
 		t.start();
 		return t;	
+	}
+	
+	private void managePanne(ServerInterface s){
+		serveurs.remove(s);
+		checkIfNbServerIsEnough();
+	}
+	
+	private void checkIfNbServerIsEnough()
+	{
+		if (!secured && serveurs.size() < 2 || serveurs.size() == 0){
+			System.out.println("Error : There are not enough availabled servers to execute task");
+			
+			System.exit(-1);
+		}
+
 	}
 	
 	// Get a String array of operation from a file
