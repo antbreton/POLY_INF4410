@@ -1,10 +1,16 @@
-package tp2.client;
+package tp2.repartiteur;
 
 import java.rmi.AccessException;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
+
+import java.lang.Thread;
+import java.lang.reflect.Array;
+import java.lang.Runnable;
+import java.util.*;
+import java.io.*;
 
 import tp2.shared.ServerInterface;
 
@@ -13,47 +19,71 @@ public class Repartiteur {
 	private ArrayList<ServerInterface> serveurs = new ArrayList<>();
 	private int currServ = 0;
 	public static int taskSize = 10;
-	private int res = 0;
+	private Integer res = 0;
 	
 	public static void main(String[] args) {
-		String fileName = null;
-
+		String opFilename = null;
+		String confFilename = null;
+		
 		if (args.length > 0) {
-			fileName = args[0];
+			opFilename = args[0];
+		}
+		
+		if (args.length > 1) {
+			confFilename = args[1];
+		} else {
+			confFilename = "ips.txt";
 		}
 
-		Repartiteur repartiteur = new Repartiteur();
-		repartiteur.run(filename);
+		Repartiteur repartiteur = new Repartiteur(confFilename);
+		repartiteur.run(opFilename);
 	}
 
-	public Repartiteur() {
-	
-		// Add servers in the list
+	public Repartiteur(String confFilename) {
+		
+		// Get Server IPs from given configuration file
+		String[] serverIPs = parseInputFile(confFilename);
+		
+		// For each IP get the associated ServerIterface
+		for (String ip : serverIPs) {
+			serveurs.add(loadServerStub(ip));
+		}
 	}
 
-	private void run() {
+	private void run(String filename) {
 		
 		// Get operations array
 		String [] operations = parseInputFile(filename);
 
 		// Get task Arrays 
 		ArrayList <Task> tasks = getTaskArray(operations);
+		ArrayList <Thread> threads = new ArrayList<>();
 		
 		// send tasks 
 		for(Task t : tasks)
 		{
-			taskManagement(t);
+			threads.add(taskManagement(t));
+		}
+		
+		//Wait for all threads to finish
+		for(Thread th : threads){
+			try{
+				th.join();
+			} catch (Exception e){
+				e.printStackTrace();
+			}
 		}
 		
 		// print result
+		System.out.println(res);
 	}
 	
 	private ArrayList<Task> getTaskArray(String [] operations)
 	{
 		ArrayList<Task> tasks = new ArrayList<>();
 		
-		Task curr;
-		for(int i =0; i<operations.length(); i++)
+		Task curr = null;
+		for(int i =0; i<Array.getLength(operations); i++)
 		{
 			if(i%taskSize == 0)
 			{
@@ -66,87 +96,124 @@ public class Repartiteur {
 		return tasks;
 	}
 	
-	private ServerInterface getNextServer()
+	private synchronized ServerInterface getNextServer()
 	{
 		// Acces concurrent qui doit être protégé par un sem
-		ServeurInterface next = serveurs.get(currServ%serveurs.size()-1);
+		ServerInterface next = serveurs.get(currServ%serveurs.size()-1);
 		currServ++;
 		return next;
 	}
 		
-	private void taskManagement(Tache t)
+	private Thread taskManagement(Task t)
 	{
-		Thread t = new Runnable() {
-			// get 2 available servers
-			ServeurInterface s1 = getNextServer();
-			ServeurInterface s2 = getNextServer();
+		Thread th = new Thread(new Runnable() {
 			
-			// execute the task on the 2 previously choosen servers
-			Thread t1 = AsyncRemoteTaskExecution(t, s1);
-			Thread t2 = AsyncRemoteTaskExecution(t, s2);
-			
-			// wait for the threads to finish
-			t1.join();
-			t2.join();
-			
-			// while the task response is not acceptable
-			while(!t.isResponseAcceptable()) // maybe put a timeout ?
+			public void run ()
 			{
-				// we send the request to another server
-				s1 = getNextServer();
-				t1 = AsyncRemoteTaskExecution(t, s1);
-				t1.join();
+				// get 2 available servers
+				ServerInterface s1 = getNextServer();
+				ServerInterface s2 = getNextServer();
+				
+				// execute the task on the 2 previously choosen servers
+				Thread t1 = AsyncRemoteTaskExecution(t, s1);
+				Thread t2 = AsyncRemoteTaskExecution(t, s2);
+				
+				try{
+					t1.join();
+					t2.join();
+				} catch (Exception e){
+					e.printStackTrace();
+				}
+				
+				// while the task response is not acceptable
+				while(t.getResponse() == -1) // maybe put a timeout ?
+				{
+					// we send the request to another server
+					s1 = getNextServer();
+					t1 = AsyncRemoteTaskExecution(t, s1);
+					try{
+						t1.join();
+					} catch (Exception e){
+						e.printStackTrace();
+					}
+				}
+				
+				// sem
+				synchronized (res){
+					res = (res + t.getResponse()) % 4000;
+				}
 			}
+		});
 			
-			// sem
-			res = (res + t.getAnswer()) % 4000;
-		};
-			
-		t.start();
+		th.start();
+		return th;
 	}
 	
-	private Thread AsyncRemoteTaskExecution(Tache tache, ServerInterface s)
+	private Thread AsyncRemoteTaskExecution(Task tache, ServerInterface s)
 	{
-		Thread t = new Runnable() {
-				void run()
+		Thread t = new Thread(new Runnable() {
+				public void run()
 				{
 					try {
 						int result = s.execute(tache.getOperations());
 						
 						// Semaphore pour ajouter la reponse
-						tache.addResponse(result);
-						
+						synchronized (tache){
+							tache.addResponse(s, result);
+						}
 						
 					} catch (RemoteException e) {
 						System.out.println("Erreur: " + e.getMessage());
 					}	
 				}
-			};
+			});
 			
 		t.start();
 		return t;	
 	}
 	
 	// Get a String array of operation from a file
-	private String[] parseInputFile(filename)
+	private String[] parseInputFile(String filename)
 	{
 		ArrayList<String> parsedLines = new ArrayList <>();
 		
 		// Open the file
-		FileInputStream fstream = new FileInputStream(filename);
-		BufferedReader br = new BufferedReader(new InputStreamReader(fstream));
+		try {
+			FileInputStream fstream = new FileInputStream(filename);
+			BufferedReader br = new BufferedReader(new InputStreamReader(fstream));
 
-		String strLine;
+			String strLine;
 
-		//Read File Line By Line
-		while ((strLine = br.readLine()) != null)   {
-		  // Print the content on the console
-		  parsedLines.add(strLine);
+			//Read File Line By Line
+			while ((strLine = br.readLine()) != null)   {
+			  // Print the content on the console
+			  parsedLines.add(strLine);
+			}
+
+			//Close the input stream
+			br.close();
+		} catch (Exception e) {
+			System.out.println("Erreur: " + e.getMessage());
+		}	
+		
+		return parsedLines.toArray(new String[0]);
+	}
+	
+	private ServerInterface loadServerStub(String hostname) {
+		ServerInterface stub = null;
+
+		try {
+			Registry registry = LocateRegistry.getRegistry(hostname);
+			stub = (ServerInterface) registry.lookup("server");
+		} catch (NotBoundException e) {
+			System.out.println("Erreur: Le nom '" + e.getMessage()
+					+ "' n'est pas défini dans le registre.");
+		} catch (AccessException e) {
+			System.out.println("Erreur: " + e.getMessage());
+		} catch (RemoteException e) {
+			System.out.println("Erreur: " + e.getMessage());
 		}
 
-		//Close the input stream
-		br.close();
-		
-		return parsedLines.toArray();
+		return stub;
 	}
 }
