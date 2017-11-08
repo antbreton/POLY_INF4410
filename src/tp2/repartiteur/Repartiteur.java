@@ -20,6 +20,7 @@ public class Repartiteur {
 	private int currServ = 0;
 	public int taskSize = 10;
 	private Integer res = 0;
+	private Object lock = new Object();
 	private Boolean secured = true;
 	
 	public static void main(String[] args) {
@@ -152,17 +153,24 @@ public class Repartiteur {
 			
 			public void run ()
 			{
-				// get 2 available servers
+				// get available servers
 				ServerInterface s1 = getNextServer();
-				ServerInterface s2 = getNextServer();
-				
 				// execute the task on the 2 previously choosen servers
 				Thread t1 = AsyncRemoteTaskExecution(t, s1);
-				Thread t2 = AsyncRemoteTaskExecution(t, s2);
+				
+				//If in insecured mode, send task to a second server right away
+				if (!secured){
+					ServerInterface s2 = getNextServer();
+					Thread t2 = AsyncRemoteTaskExecution(t, s2);
+					try{
+						t2.join();
+					} catch (Exception e){
+						//e.printStackTrace();
+					}
+				}
 				
 				try{
 					t1.join();
-					t2.join();
 				} catch (Exception e){
 					//e.printStackTrace();
 				}
@@ -181,7 +189,9 @@ public class Repartiteur {
 				}
 				
 				// sem
-				synchronized (res){
+				// Can't synchronize on res because of Integer pooling in java:
+				// https://stackoverflow.com/questions/38117630/thread-synchronization-on-integer-instance-variable
+				synchronized(lock){
 					res = (res + t.getResponse()) % 4000;
 				}
 			}
@@ -201,8 +211,10 @@ public class Repartiteur {
 						
 						// Semaphore pour ajouter la reponse
 						synchronized (tache){
-							System.out.println("Retour du serveur: " + result);
-							tache.addResponse(s, result);
+							//System.out.println("Retour du serveur: " + result);
+							if (result >= 0){
+								tache.addResponse(s, result);
+							}
 						}
 						
 					} catch (RemoteException e) {
@@ -267,7 +279,7 @@ public class Repartiteur {
 		ServerInterface stub = null;
 
 		try {
-			Registry registry = LocateRegistry.getRegistry(hostname);
+			Registry registry = LocateRegistry.getRegistry(hostname, 5001);
 			stub = (ServerInterface) registry.lookup("server");
 		} catch (NotBoundException e) {
 			System.out.println("Erreur: Le nom '" + e.getMessage()
